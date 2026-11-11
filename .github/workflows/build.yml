@@ -1,1 +1,467 @@
+name: Build APK
 
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Create project files
+        run: |
+          mkdir -p app/src/main/java/com/almaha/debts
+
+          cat > settings.gradle.kts <<'EOF'
+          pluginManagement {
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = "Debts"
+          include(":app")
+          EOF
+
+          cat > build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+          }
+          EOF
+
+          cat > gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2g
+          android.useAndroidX=false
+          EOF
+
+          cat > app/build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+          android {
+              namespace = "com.almaha.debts"
+              compileSdk = 34
+              defaultConfig {
+                  applicationId = "com.almaha.debts"
+                  minSdk = 29
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions { jvmTarget = "17" }
+          }
+          EOF
+
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application
+                  android:allowBackup="true"
+                  android:label="المها للتسويق الإلكتروني"
+                  android:supportsRtl="true"
+                  android:theme="@android:style/Theme.Material.Light.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:windowSoftInputMode="adjustResize">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat > app/src/main/java/com/almaha/debts/MainActivity.kt <<'EOF'
+          package com.almaha.debts
+
+          import android.app.Activity
+          import android.app.AlertDialog
+          import android.content.ContentValues
+          import android.content.Intent
+          import android.graphics.Color
+          import android.graphics.Paint
+          import android.graphics.Typeface
+          import android.graphics.pdf.PdfDocument
+          import android.os.Bundle
+          import android.provider.MediaStore
+          import android.text.InputType
+          import android.view.Gravity
+          import android.view.View
+          import android.widget.*
+          import org.json.JSONArray
+          import org.json.JSONObject
+          import java.text.SimpleDateFormat
+          import java.util.*
+
+          class MainActivity : Activity() {
+
+              data class Debt(val id: Long, var name: String, var amount: Double, var date: String)
+
+              private val burg = Color.parseColor("#8B1538")
+              private val dark = Color.parseColor("#5A0B22")
+              private val gold = Color.parseColor("#C9A24B")
+              private val cream = Color.parseColor("#FBF7F2")
+
+              private val items = mutableListOf<Debt>()
+              private var editId: Long? = null
+
+              private lateinit var nameIn: EditText
+              private lateinit var amountIn: EditText
+              private lateinit var dateIn: EditText
+              private lateinit var saveBtn: Button
+              private lateinit var cancelBtn: Button
+              private lateinit var listBox: LinearLayout
+              private lateinit var totalTv: TextView
+
+              override fun onCreate(b: Bundle?) {
+                  super.onCreate(b)
+                  window.statusBarColor = dark
+                  load()
+                  setContentView(buildUi())
+                  resetForm()
+                  render()
+              }
+
+              private fun load() {
+                  val s = getSharedPreferences("debts", MODE_PRIVATE).getString("data", "[]") ?: "[]"
+                  val a = JSONArray(s)
+                  for (i in 0 until a.length()) {
+                      val o = a.getJSONObject(i)
+                      items.add(Debt(o.getLong("id"), o.getString("name"), o.getDouble("amount"), o.getString("date")))
+                  }
+              }
+
+              private fun save() {
+                  val a = JSONArray()
+                  items.forEach {
+                      a.put(JSONObject().put("id", it.id).put("name", it.name).put("amount", it.amount).put("date", it.date))
+                  }
+                  getSharedPreferences("debts", MODE_PRIVATE).edit().putString("data", a.toString()).apply()
+              }
+
+              private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+              private fun today() = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+              private fun fmt(d: Double): String {
+                  val s = if (d == Math.floor(d)) String.format(Locale.US, "%,.0f", d) else String.format(Locale.US, "%,.2f", d)
+                  return s + " ر.ي"
+              }
+
+              private fun field(h: String): EditText {
+                  val e = EditText(this)
+                  e.hint = h
+                  e.setSingleLine()
+                  e.setPadding(dp(12), dp(10), dp(12), dp(10))
+                  e.setBackgroundColor(Color.WHITE)
+                  return e
+              }
+
+              private fun btn(t: String, bg: Int, fg: Int): Button {
+                  val b = Button(this)
+                  b.text = t
+                  b.setTextColor(fg)
+                  b.setBackgroundColor(bg)
+                  b.isAllCaps = false
+                  return b
+              }
+
+              private fun buildUi(): View {
+                  val root = LinearLayout(this)
+                  root.orientation = LinearLayout.VERTICAL
+                  root.setBackgroundColor(cream)
+                  root.layoutDirection = View.LAYOUT_DIRECTION_RTL
+
+                  val header = LinearLayout(this)
+                  header.orientation = LinearLayout.VERTICAL
+                  header.gravity = Gravity.CENTER
+                  header.setBackgroundColor(burg)
+                  header.setPadding(dp(12), dp(16), dp(12), dp(14))
+                  val title = TextView(this)
+                  title.text = "المها للتسويق الإلكتروني"
+                  title.textSize = 22f
+                  title.setTextColor(Color.WHITE)
+                  title.typeface = Typeface.DEFAULT_BOLD
+                  title.gravity = Gravity.CENTER
+                  header.addView(title)
+                  val phone = TextView(this)
+                  phone.text = "+967 775 759 280"
+                  phone.textSize = 15f
+                  phone.setTextColor(gold)
+                  phone.textDirection = View.TEXT_DIRECTION_LTR
+                  phone.gravity = Gravity.CENTER
+                  header.addView(phone)
+                  root.addView(header)
+                  val line = View(this)
+                  line.setBackgroundColor(gold)
+                  root.addView(line, LinearLayout.LayoutParams(-1, dp(4)))
+
+                  val form = LinearLayout(this)
+                  form.orientation = LinearLayout.VERTICAL
+                  form.setPadding(dp(12), dp(10), dp(12), dp(6))
+                  nameIn = field("اسم المدين")
+                  amountIn = field("المبلغ (ريال يمني)")
+                  amountIn.inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+                  dateIn = field("التاريخ")
+                  dateIn.inputType = InputType.TYPE_CLASS_TEXT
+                  dateIn.textDirection = View.TEXT_DIRECTION_LTR
+                  saveBtn = btn("إضافة المدين", burg, Color.WHITE)
+                  cancelBtn = btn("إلغاء التعديل", Color.WHITE, burg)
+                  form.addView(nameIn)
+                  val row = LinearLayout(this)
+                  row.orientation = LinearLayout.HORIZONTAL
+                  row.addView(amountIn, LinearLayout.LayoutParams(0, -2, 1f))
+                  row.addView(dateIn, LinearLayout.LayoutParams(0, -2, 1f))
+                  form.addView(row)
+                  form.addView(saveBtn)
+                  form.addView(cancelBtn)
+                  root.addView(form)
+
+                  listBox = LinearLayout(this)
+                  listBox.orientation = LinearLayout.VERTICAL
+                  listBox.setPadding(dp(12), dp(4), dp(12), dp(8))
+                  val scroll = ScrollView(this)
+                  scroll.addView(listBox)
+                  root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+
+                  val footer = LinearLayout(this)
+                  footer.orientation = LinearLayout.VERTICAL
+                  footer.setBackgroundColor(dark)
+                  footer.setPadding(dp(14), dp(10), dp(14), dp(10))
+                  val tr = LinearLayout(this)
+                  tr.orientation = LinearLayout.HORIZONTAL
+                  val lbl = TextView(this)
+                  lbl.text = "إجمالي الديون"
+                  lbl.textSize = 17f
+                  lbl.setTextColor(Color.WHITE)
+                  tr.addView(lbl, LinearLayout.LayoutParams(0, -2, 1f))
+                  totalTv = TextView(this)
+                  totalTv.textSize = 18f
+                  totalTv.setTextColor(gold)
+                  totalTv.typeface = Typeface.DEFAULT_BOLD
+                  tr.addView(totalTv)
+                  footer.addView(tr)
+                  val pdfBtn = btn("تصدير PDF", gold, dark)
+                  footer.addView(pdfBtn)
+                  root.addView(footer)
+
+                  saveBtn.setOnClickListener { onSave() }
+                  cancelBtn.setOnClickListener { resetForm() }
+                  pdfBtn.setOnClickListener { exportPdf() }
+                  return root
+              }
+
+              private fun resetForm() {
+                  editId = null
+                  nameIn.setText("")
+                  amountIn.setText("")
+                  dateIn.setText(today())
+                  saveBtn.text = "إضافة المدين"
+                  cancelBtn.visibility = View.GONE
+              }
+
+              private fun onSave() {
+                  val n = nameIn.text.toString().trim()
+                  val a = amountIn.text.toString().toDoubleOrNull()
+                  var d = dateIn.text.toString().trim()
+                  if (d.isEmpty()) d = today()
+                  if (n.isEmpty() || a == null || a < 0) {
+                      Toast.makeText(this, "أدخل الاسم والمبلغ", Toast.LENGTH_SHORT).show()
+                      return
+                  }
+                  val e = items.firstOrNull { it.id == editId }
+                  if (e != null) {
+                      e.name = n; e.amount = a; e.date = d
+                  } else {
+                      items.add(Debt(System.currentTimeMillis(), n, a, d))
+                  }
+                  save(); resetForm(); render()
+              }
+
+              private fun render() {
+                  listBox.removeAllViews()
+                  if (items.isEmpty()) {
+                      val t = TextView(this)
+                      t.text = "لا يوجد مدينون بعد. أضف أول مدين من الأعلى."
+                      t.gravity = Gravity.CENTER
+                      t.setPadding(0, dp(24), 0, 0)
+                      listBox.addView(t)
+                  }
+                  for (d in items) {
+                      val r = LinearLayout(this)
+                      r.orientation = LinearLayout.HORIZONTAL
+                      r.gravity = Gravity.CENTER_VERTICAL
+                      r.setBackgroundColor(Color.WHITE)
+                      r.setPadding(dp(10), dp(8), dp(10), dp(8))
+                      val col = LinearLayout(this)
+                      col.orientation = LinearLayout.VERTICAL
+                      val nm = TextView(this)
+                      nm.text = d.name
+                      nm.textSize = 16f
+                      nm.setTextColor(Color.BLACK)
+                      nm.typeface = Typeface.DEFAULT_BOLD
+                      col.addView(nm)
+                      val dt = TextView(this)
+                      dt.text = d.date
+                      dt.textSize = 12f
+                      dt.setTextColor(Color.GRAY)
+                      dt.textDirection = View.TEXT_DIRECTION_LTR
+                      col.addView(dt)
+                      r.addView(col, LinearLayout.LayoutParams(0, -2, 1f))
+                      val am = TextView(this)
+                      am.text = fmt(d.amount)
+                      am.textSize = 15f
+                      am.setTextColor(burg)
+                      am.typeface = Typeface.DEFAULT_BOLD
+                      am.setPadding(dp(6), 0, dp(6), 0)
+                      r.addView(am)
+                      val ed = btn("تعديل", Color.parseColor("#F6EBCB"), dark)
+                      ed.minWidth = 0
+                      ed.minimumWidth = 0
+                      ed.setOnClickListener {
+                          editId = d.id
+                          nameIn.setText(d.name)
+                          amountIn.setText(d.amount.toString().removeSuffix(".0"))
+                          dateIn.setText(d.date)
+                          saveBtn.text = "حفظ التعديل"
+                          cancelBtn.visibility = View.VISIBLE
+                      }
+                      r.addView(ed)
+                      val rm = btn("حذف", Color.parseColor("#F7DCE3"), burg)
+                      rm.minWidth = 0
+                      rm.minimumWidth = 0
+                      rm.setOnClickListener {
+                          AlertDialog.Builder(this).setMessage("حذف هذا المدين؟")
+                              .setPositiveButton("حذف") { _, _ ->
+                                  items.remove(d)
+                                  if (editId == d.id) resetForm()
+                                  save(); render()
+                              }
+                              .setNegativeButton("إلغاء", null).show()
+                      }
+                      r.addView(rm)
+                      val lp = LinearLayout.LayoutParams(-1, -2)
+                      lp.topMargin = dp(6)
+                      listBox.addView(r, lp)
+                  }
+                  totalTv.text = fmt(items.sumOf { it.amount })
+              }
+
+              private fun exportPdf() {
+                  if (items.isEmpty()) {
+                      Toast.makeText(this, "لا يوجد مدينون للتصدير", Toast.LENGTH_SHORT).show()
+                      return
+                  }
+                  val doc = PdfDocument()
+                  val page = doc.startPage(PdfDocument.PageInfo.Builder(595, 842, 1).create())
+                  val c = page.canvas
+                  val p = Paint(Paint.ANTI_ALIAS_FLAG)
+                  val cx = 297.5f
+
+                  p.color = dark; c.drawRect(0f, 0f, 595f, 130f, p)
+                  p.color = gold; c.drawRect(0f, 130f, 595f, 135f, p)
+                  p.textAlign = Paint.Align.CENTER
+                  p.color = Color.WHITE; p.textSize = 30f; p.isFakeBoldText = true
+                  c.drawText("المها للتسويق الإلكتروني", cx, 55f, p)
+                  p.isFakeBoldText = false
+                  p.color = Color.parseColor("#E4C77E"); p.textSize = 16f
+                  c.drawText("+967 775 759 280", cx, 84f, p)
+                  p.color = Color.WHITE; p.textSize = 13f
+                  c.drawText("كشف الديون - " + today(), cx, 112f, p)
+
+                  val left = 40f
+                  val right = 555f
+                  val top = 160f
+                  p.color = burg; c.drawRect(left, top, right, top + 34f, p)
+                  p.color = Color.WHITE; p.textSize = 15f; p.isFakeBoldText = true
+                  p.textAlign = Paint.Align.RIGHT; c.drawText("الاسم", right - 12f, top + 22f, p)
+                  p.textAlign = Paint.Align.LEFT; c.drawText("المبلغ (ريال يمني)", left + 12f, top + 22f, p)
+                  p.isFakeBoldText = false
+
+                  val start = top + 34f
+                  val n = items.size
+                  val rh = minOf(32f, (720f - start) / n)
+                  val ts = (rh * 0.5f).coerceIn(5f, 15f)
+                  var sum = 0.0
+                  for ((i, d) in items.withIndex()) {
+                      val y = start + i * rh
+                      sum += d.amount
+                      if (i % 2 == 0) {
+                          p.color = Color.parseColor("#FBF4E4")
+                          c.drawRect(left, y, right, y + rh, p)
+                      }
+                      val base = y + rh / 2 + ts * 0.35f
+                      p.textSize = ts
+                      p.color = Color.parseColor("#2B1018")
+                      var nm = d.name
+                      while (nm.length > 1 && p.measureText(nm) > 330f) nm = nm.dropLast(1)
+                      p.textAlign = Paint.Align.RIGHT
+                      c.drawText(nm, right - 12f, base, p)
+                      p.color = burg
+                      p.textAlign = Paint.Align.LEFT
+                      c.drawText(fmt(d.amount), left + 12f, base, p)
+                  }
+
+                  val ty = minOf(start + n * rh + 14f, 760f)
+                  p.color = dark; c.drawRect(left, ty, right, ty + 48f, p)
+                  p.color = gold; c.drawRect(left, ty + 48f, right, ty + 52f, p)
+                  p.textSize = 17f; p.isFakeBoldText = true
+                  p.color = Color.WHITE; p.textAlign = Paint.Align.RIGHT
+                  c.drawText("الإجمالي الكلي", right - 12f, ty + 30f, p)
+                  p.color = Color.parseColor("#E4C77E"); p.textAlign = Paint.Align.LEFT
+                  c.drawText(fmt(sum), left + 12f, ty + 30f, p)
+                  doc.finishPage(page)
+
+                  val cv = ContentValues()
+                  cv.put(MediaStore.MediaColumns.DISPLAY_NAME, "debts-" + today() + ".pdf")
+                  cv.put(MediaStore.MediaColumns.MIME_TYPE, "application/pdf")
+                  cv.put(MediaStore.MediaColumns.RELATIVE_PATH, "Download")
+                  val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv)
+                  if (uri != null) {
+                      contentResolver.openOutputStream(uri)?.use { doc.writeTo(it) }
+                      Toast.makeText(this, "تم حفظ الملف في مجلد التنزيلات", Toast.LENGTH_LONG).show()
+                      try {
+                          val i = Intent(Intent.ACTION_VIEW)
+                          i.setDataAndType(uri, "application/pdf")
+                          i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                          startActivity(i)
+                      } catch (e: Exception) {
+                      }
+                  }
+                  doc.close()
+              }
+          }
+          EOF
+
+      - name: Build APK
+        run: gradle assembleDebug --no-daemon
+
+      - name: Publish APK
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.run_number }}
+          name: Almaha Debts v${{ github.run_number }}
+          files: app/build/outputs/apk/debug/app-debug.apk
